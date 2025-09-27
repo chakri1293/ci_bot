@@ -1,7 +1,7 @@
 from typing import Dict
 import os
 
-class InputAgent:
+class ClassificationAgent:
     """
     Handles:
         - Accepting user query

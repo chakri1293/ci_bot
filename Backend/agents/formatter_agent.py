@@ -1,105 +1,70 @@
-import os
-import json
-from typing import Dict
-from dotenv import load_dotenv
-import httpx
-
-load_dotenv()
+from typing import Dict, List
 
 class FormatterAgent:
-  """
-  Formats aggregated results into readable, UI-ready content.
-  Can create Markdown, plain text, bullet lists, timelines, and tables.
-  """
-
-  def __init__(self,llm_client):
-    self.llm = llm_client
-
-  def format(self, agg_result: Dict, mode: str, as_markdown: bool = True) -> Dict:
     """
-    Input: AggregatorAgent result {"tables":[...],"timelines":[...],"insights":[...]} and mode
-    Output: JSON with UI-ready fields: {summary, bullets, markdown, tables, timelines}
+    Formats the aggregated results for final user response.
+    Ensures readability, preserves bullets, numbered lists, paragraphs, and relevant URLs.
     """
-    if not any([agg_result.get("tables"), agg_result.get("timelines"), agg_result.get("insights")]):
-      return {
-        "summary": "No actionable intelligence found.",
-        "bullets": [],
-        "markdown": "",
-        "tables": [],
-        "timelines": []
-      }
 
+    MAX_SUMMARY_CHARS = 2000  # truncate summary to avoid overly long text
+    MAX_BULLETS = 10  # max bullets to show
 
-    ui_prompt = (
-      "You are a UI format expert bot. Given aggregation output for a competitive intelligence dashboard, "
-      "produce the following for the end user:\n"
-      "- summary: A single concise paragraph summarizing the entire aggregation in plain English.\n"
-      "- bullets: The top 5-7 key insights, as human-readable bullet points.\n"
-      "- markdown: Professionally formatted Markdown suitable for dashboard display, showing highlights, any tables as Markdown and timelines as ordered lists, with good use of bold and section headings.\n"
-      "- tables: The tables as lists-of-lists, with the first sublist as headers (for export as CSV/XLS).\n"
-      "- timelines: Each event in the timeline as a {date, headline, details} dictionary.\n"
-      "Do not simply echo the input; reword and distill. Use natural business language and clear structure. Only output valid JSON object."
-    )
+    def __init__(self, llm_client):
+        """
+        llm_client: a client with a chat() method that accepts messages
+        [{"role": "user", "content": "..."}] and returns a dict with 'content'.
+        """
+        self.llm = llm_client
 
+    def format(self, agg_result: Dict) -> Dict:
+        """
+        Formats aggregated result into a rich, user-facing response.
+        agg_result may contain:
+        - summary: raw combined summary text
+        - topics: dict of topic-wise summaries
+        - raw_extractions: list of extracted content per document
+        """
+        if not agg_result or "summary" not in agg_result:
+            return {"summary": "No relevant information found."}
 
-    try:
-      user_content = {
-        "mode": mode,
-        "tables": agg_result.get("tables", []),
-        "timelines": agg_result.get("timelines", []),
-        "insights": agg_result.get("insights", []),
-      }
+        raw_summary = agg_result.get("summary", "").strip()
+        topics = agg_result.get("topics", {})
+        raw_extractions = agg_result.get("raw_extractions", [])
 
+        # ---------- Build topic hints for user ----------
+        topic_sections = []
+        for topic, text in topics.items():
+            if text and text != "NO RELEVANT INFO":
+                topic_sections.append(f"### {topic}\n{text}")
 
-      response = self.llm.chat(
-        messages=[
-          {"role": "system", "content": ui_prompt},
-          {"role": "user", "content": json.dumps(user_content)}
-        ]
-      )
-      content = response.get("content", "")
-      # Output should be a UI-ready JSON dict
-      result = json.loads(content)
-      print("format completed")
-      # Defensive: fill defaults
-      return {
-        "summary": result.get("summary", ""),
-        "bullets": result.get("bullets", []),
-        "markdown": result.get("markdown", ""),
-        "tables": result.get("tables", []),
-        "timelines": result.get("timelines", [])
-      }
-    except Exception as e:
-      print("Error formatting output:", e)
-      insights = agg_result.get("insights", [])
-      return {
-        "summary": insights[0] if insights else "Formatting failed.",
-        "bullets": insights[:5] if insights else [],
-        "markdown": "\n".join(insights) if insights else "",
-        "tables": agg_result.get("tables", []),
-        "timelines": agg_result.get("timelines", [])
-      }
+        topic_text = "\n\n".join(topic_sections)
 
+        # ---------- Combine for final LLM prompt ----------
+        final_input = raw_summary
+        if topic_text:
+            final_input += "\n\n" + "Topic-wise insights:\n" + topic_text
 
-# if __name__ == "__main__":
-#   from extract_api import FetchAndExtractAgent # your fetch agent import
-#   from dedup import DedupAndSummarizeAgent # your dedup agent import
-#   from agg import AggregatorAgent
+        # ---------- LLM call to produce final user-friendly response ----------
+        try:
+            prompt = (
+                "You are an expert assistant. Produce a concise, readable response to the user query, "
+                "based only on the content below. Preserve bullets, numbered lists, paragraphs, and URLs. "
+                "Do not add external knowledge. Keep it clear and structured for easy reading.\n\n"
+                f"{final_input}"
+            )
+            response = self.llm.chat([{"role": "user", "content": prompt}])
+            final_summary = response.get("content", "").strip()
+        except Exception as e:
+            print("LLM formatting failed:", e)
+            final_summary = final_input[:self.MAX_SUMMARY_CHARS]
 
+        # ---------- Truncate if too long ----------
+        if len(final_summary) > self.MAX_SUMMARY_CHARS:
+            final_summary = final_summary[:self.MAX_SUMMARY_CHARS]
 
-#   fetch_agent = FetchAndExtractAgent()
-#   dedup_agent = DedupAndSummarizeAgent()
-#   agg_agent = AggregatorAgent()
-
-
-#   querydata = {"query": "Give me all major product launches in AI tools this month", "mode": "blended"}
-#   docs = fetch_agent.fetch_documents(querydata)
-#   print('fetch done')
-#   dedup_results = dedup_agent.process_documents(docs)
-#   print("Final processed documents")
-#   agg_result = agg_agent.aggregate(dedup_results, querydata["mode"])
-#   print("Aggregated Result done")
-#   formatter = FormatterAgent()
-#   output = formatter.format(agg_result, querydata["mode"])
-#   print("Formatting done")
-#   print(json.dumps(output, indent=2))
+        # ---------- Return final structured response ----------
+        return {
+            "summary": final_summary,
+            "topics": topics,  # optional: can be used in UI hover or details
+            "raw_extractions": raw_extractions
+        }

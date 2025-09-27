@@ -6,6 +6,8 @@ import openai
 import uvicorn
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from tavily import TavilyClient  # import TavilyClient
+
 
 # Load environment variables
 load_dotenv()
@@ -28,6 +30,15 @@ class LLMClient:
         return {"content": response.choices[0].message.content.strip()}
 
 
+# Tavily client wrapper
+class TavilyAPIClient:
+    def __init__(self):
+        tavily_api_key = os.getenv("TAVILY_API_KEY")
+        if not tavily_api_key:
+            raise ValueError("TAVILY_API_KEY not set in environment")
+        self.client = TavilyClient(api_key=tavily_api_key)
+
+
 # FastAPI app
 app = FastAPI(title="Multi-Agent Competitive Intelligence API")
 app.add_middleware(
@@ -38,8 +49,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize clients
 llm_client = LLMClient()
-pipeline = MultiAgentPipeline(llm_client)
+tavily_client = TavilyAPIClient()
+
+# Pass llm_client and tavily_client.client to your pipeline if needed
+pipeline = MultiAgentPipeline(llm_client, tavily_client.client)  # Adjust constructor
 
 
 class QueryRequest(BaseModel):
