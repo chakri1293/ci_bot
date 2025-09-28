@@ -88,7 +88,7 @@ class MultiAgentPipeline:
         mid_score_urls = [{"url": r["url"], "topic": r.get("topic", "general")} for r in results if 0.5 <= r.get("score", 0) <= 0.7]
 
         state["high_score_urls"] = high_score_urls if high_score_urls else None
-        # state["mid_score_urls"] = mid_score_urls if mid_score_urls else None
+        state["mid_score_urls"] = mid_score_urls if mid_score_urls else None
 
         return state
 
@@ -109,6 +109,7 @@ class MultiAgentPipeline:
             docs = list(self.crawl_agent.crawl(urls))
             print("Crawled docs count:", len(docs))
             state["docs"] = docs
+            state["url_with_topics"] = urls
         else:
             state["docs"] = []
         return state
