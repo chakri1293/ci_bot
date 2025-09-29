@@ -71,7 +71,7 @@ class TavilyCrawlAgent:
                     "url": page.get("url"),
                     "text": text,
                     "favicon": page.get("favicon", []),
-                    "images": [],
+                    "images": page.get("images", []),
                     "topic": topic,
                     "source": "crawled"
                 })

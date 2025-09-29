@@ -7,11 +7,16 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from tavily import TavilyClient  # import TavilyClient
+from pymongo import MongoClient
 
 
 # Load environment variables
 load_dotenv()
 
+# ---- MongoDB Client Setup ----
+MONGO_URI = os.getenv("MONGO_URI")  # Add to .env: MONGO_URI="mongodb+srv://..."
+mongo_client = MongoClient(MONGO_URI)
+mongo_db = mongo_client["multi_agent_ci"]
 
 # Real LLM client wrapper using OpenAI API key from env
 class LLMClient:
@@ -24,8 +29,9 @@ class LLMClient:
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=messages,
-            temperature=0.3,
-            max_tokens=1000,
+            temperature=0.0,
+            max_tokens=800,
+            timeout=6
         )
         return {"content": response.choices[0].message.content.strip()}
 
@@ -43,7 +49,7 @@ class TavilyAPIClient:
 app = FastAPI(title="Multi-Agent Competitive Intelligence API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server origin
+    allow_origins=[os.getenv("APP_URL")],  # React dev server origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,7 +60,7 @@ llm_client = LLMClient()
 tavily_client = TavilyAPIClient()
 
 # Pass llm_client and tavily_client.client to your pipeline if needed
-pipeline = MultiAgentPipeline(llm_client, tavily_client.client)  # Adjust constructor
+pipeline = MultiAgentPipeline(llm_client, tavily_client.client,mongo_db)  # Adjust constructor
 
 
 class QueryRequest(BaseModel):

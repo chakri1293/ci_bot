@@ -32,7 +32,7 @@ class TavilyExtractAgent:
         response = self.client.extract(
             urls=urls,  # pass list of URLs at once
             include_favicon=False,
-            include_images=True,
+            include_images=False,
             extract_depth="basic",
             format="markdown"
         )

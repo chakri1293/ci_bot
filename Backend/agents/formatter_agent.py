@@ -1,70 +1,101 @@
-from typing import Dict, List
+# agents/formatter_agent.py
+from typing import Dict
+from datetime import datetime
 
 class FormatterAgent:
     """
-    Formats the aggregated results for final user response.
-    Ensures readability, preserves bullets, numbered lists, paragraphs, and relevant URLs.
+    Formats aggregated results for final user response in a UI-friendly way.
+    Supports text, bullets, numbered lists, paragraphs, and images.
     """
 
     MAX_SUMMARY_CHARS = 2000  # truncate summary to avoid overly long text
     MAX_BULLETS = 10  # max bullets to show
 
-    def __init__(self, llm_client):
+    def __init__(self, llm_client,mongo_db):
         """
         llm_client: a client with a chat() method that accepts messages
         [{"role": "user", "content": "..."}] and returns a dict with 'content'.
         """
         self.llm = llm_client
+        self.collection = mongo_db["response_logs"]
 
-    def format(self, agg_result: Dict) -> Dict:
+    def format(self, query, agg_result: Dict) -> Dict:
         """
-        Formats aggregated result into a rich, user-facing response.
+        Formats aggregated result into a rich, structured response.
         agg_result may contain:
         - summary: raw combined summary text
         - topics: dict of topic-wise summaries
         - raw_extractions: list of extracted content per document
         """
-        if not agg_result or "summary" not in agg_result:
-            return {"summary": "No relevant information found."}
-
-        raw_summary = agg_result.get("summary", "").strip()
-        topics = agg_result.get("topics", {})
-        raw_extractions = agg_result.get("raw_extractions", [])
-
-        # ---------- Build topic hints for user ----------
-        topic_sections = []
-        for topic, text in topics.items():
-            if text and text != "NO RELEVANT INFO":
-                topic_sections.append(f"### {topic}\n{text}")
-
-        topic_text = "\n\n".join(topic_sections)
-
-        # ---------- Combine for final LLM prompt ----------
-        final_input = raw_summary
-        if topic_text:
-            final_input += "\n\n" + "Topic-wise insights:\n" + topic_text
-
-        # ---------- LLM call to produce final user-friendly response ----------
         try:
-            prompt = (
-                "You are an expert assistant. Produce a concise, readable response to the user query, "
-                "based only on the content below. Preserve bullets, numbered lists, paragraphs, and URLs. "
-                "Do not add external knowledge. Keep it clear and structured for easy reading.\n\n"
-                f"{final_input}"
-            )
-            response = self.llm.chat([{"role": "user", "content": prompt}])
-            final_summary = response.get("content", "").strip()
+            if not agg_result or "summary" not in agg_result:
+                return {"summary": "No relevant information found.", "topics": {}, "raw_extractions": [], "content_blocks": []}
+
+            raw_summary = agg_result.get("summary", "").strip()
+            topics = agg_result.get("topics", {})
+            raw_extractions = agg_result.get("raw_extractions", [])
+
+            # ---------- Build structured content blocks ----------
+            content_blocks = []
+            if raw_summary:
+                content_blocks.append({"type": "paragraph", "text": raw_summary})
+
+            # Topics
+            for topic, text in topics.items():
+                if text and text != "NO RELEVANT INFO":
+                    content_blocks.append({"type": "topic", "title": topic, "text": text})
+
+            # Images in raw extractions
+            for raw in raw_extractions:
+                if raw.get("type") == "image" and raw.get("url"):
+                    content_blocks.append({"type": "image", "content": raw["url"], "meta": raw.get("meta", {})})
+
+            # ---------- Optional: Ask LLM to clean / enhance formatting ----------
+            if content_blocks:
+                prompt = (
+                    "You are an expert assistant. Take the following content blocks and produce "
+                    "a visually clean, concise, user-friendly response. Preserve paragraphs, bullets, "
+                    "and topic sections. Do not add extra knowledge.\n\n"
+                    f"{content_blocks}"
+                )
+                try:
+                    llm_response = self.llm.chat([{"role": "user", "content": prompt}])
+                    llm_text = llm_response.get("content", "").strip()
+                    if llm_text:
+                        # Replace raw summary block with LLM-enhanced text (truncate to MAX_SUMMARY_CHARS)
+                        content_blocks = [{"type": "paragraph", "text": llm_text[:self.MAX_SUMMARY_CHARS]}]
+                except Exception as e:
+                    # If LLM formatting fails, keep original blocks and log
+                    print("LLM formatting step failed in FormatterAgent:", e)
+            
+            # Log to Mongo
+            try:
+                self.collection.insert_one({
+                    "normalized_query": query,
+                    "response": {
+                        "summary": raw_summary[:self.MAX_SUMMARY_CHARS],
+                        "topics": topics,
+                        "raw_extractions": raw_extractions,
+                        "content_blocks": content_blocks
+                    },
+                    "timestamp": datetime.utcnow()
+                })
+            except Exception as e:
+                print("Mongo logging failed in FormatterAgent:", e)
+
+            return {
+                "summary": raw_summary[:self.MAX_SUMMARY_CHARS],
+                "topics": topics,
+                "raw_extractions": raw_extractions,
+                "content_blocks": content_blocks
+            }
+
         except Exception as e:
-            print("LLM formatting failed:", e)
-            final_summary = final_input[:self.MAX_SUMMARY_CHARS]
-
-        # ---------- Truncate if too long ----------
-        if len(final_summary) > self.MAX_SUMMARY_CHARS:
-            final_summary = final_summary[:self.MAX_SUMMARY_CHARS]
-
-        # ---------- Return final structured response ----------
-        return {
-            "summary": final_summary,
-            "topics": topics,  # optional: can be used in UI hover or details
-            "raw_extractions": raw_extractions
-        }
+            print("Formatting failed in FormatterAgent:", e)
+            # Return a generic, structured error block
+            return {
+                "summary": "",
+                "topics": {},
+                "raw_extractions": [],
+                "content_blocks": [{"type": "text", "text": "An error occurred while processing your request."}]
+            }

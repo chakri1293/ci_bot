@@ -7,9 +7,10 @@ class SmartAggregatorAgent:
     and provides a blended visual-rich summary.
     """
 
-    def __init__(self, llm_client, max_workers=6, max_input_chars=20000):
+    def __init__(self, llm_client, max_workers=8, max_docs_process=20, max_input_chars=15000):
         self.llm = llm_client
         self.max_workers = max_workers
+        self.max_docs_process = max_docs_process
         self.max_input_chars = max_input_chars  # Approx 8192 tokens safe
 
     def _trim_for_token_limit(self, text):
@@ -90,6 +91,9 @@ class SmartAggregatorAgent:
             docs_to_process = docs["results"]
         else:
             docs_to_process = docs
+
+        # Limit to 20 documents - Crawl is many documents
+        docs_to_process = docs_to_process[:self.max_docs_process]
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
             futures = [
