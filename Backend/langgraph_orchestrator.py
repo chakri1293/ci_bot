@@ -1,11 +1,14 @@
-# multi_agent_pipeline.py
+# langgraph_orchestrator.py
+import time
+import asyncio
+from typing import Dict
+from concurrent.futures import ThreadPoolExecutor
 from langgraph.graph import StateGraph
-from typing import Dict, Literal
 
 class MultiAgentPipeline:
     def __init__(self, llm_client, tavily_client, mongo_db):
         self.llm_client = llm_client
-        self.tavily_client = tavily_client  # pass shared TavilyClient
+        self.tavily_client = tavily_client
         self.mongo_db = mongo_db
 
         # Import agents
@@ -17,31 +20,31 @@ class MultiAgentPipeline:
         from agents.formatter_agent import FormatterAgent
 
         # Initialize agents
-        self.input_agent = ClassificationAgent(llm_client,self.mongo_db)
+        self.input_agent = ClassificationAgent(llm_client, self.mongo_db)
         self.search_agent = TavilySearchAgent(self.tavily_client)
         self.extract_agent = TavilyExtractAgent(self.tavily_client)
         self.crawl_agent = TavilyCrawlAgent(self.tavily_client)
         self.aggregate_agent = SmartAggregatorAgent(llm_client)
-        self.formatter_agent = FormatterAgent(llm_client,self.mongo_db)
+        self.formatter_agent = FormatterAgent(llm_client, self.mongo_db)
 
         # Create graph
         self.graph = StateGraph(dict)
 
-        # Add nodes with safe wrapper
+        # Node wrappers
         self.graph.add_node("ClassificationAgent", self._safe(self._classify))
         self.graph.add_node("TavilySearchAgent", self._safe(self._search_node))
         self.graph.add_node("TavilyExtractAgent", self._safe(self._extract))
         self.graph.add_node("TavilyCrawlAgent", self._safe(self._crawl))
-        self.graph.add_node("SmartAggregatorAgent", self._safe(self._aggregate))
+        self.graph.add_node("SmartAggregatorAgent", self._async_safe(self._aggregate))
         self.graph.add_node("FormatterAgent", self._safe(self._format))
 
-        # Preserve normal edges
+        # Normal edges
         self.graph.add_edge("TavilyExtractAgent", "SmartAggregatorAgent")
         self.graph.add_edge("TavilyCrawlAgent", "SmartAggregatorAgent")
         self.graph.add_edge("SmartAggregatorAgent", "FormatterAgent")
 
-        # Conditional routing from ClassificationAgent
-        def _route_from_classify(state: Dict) -> Literal["FormatterAgent", "TavilySearchAgent"]:
+        # Conditional routing
+        def _route_from_classify(state: Dict):
             classified = state.get("classified", {})
             if classified.get("final"):
                 return "FormatterAgent"
@@ -50,14 +53,10 @@ class MultiAgentPipeline:
         self.graph.add_conditional_edges(
             "ClassificationAgent",
             self._safe(_route_from_classify),
-            {
-                "FormatterAgent": "FormatterAgent",
-                "TavilySearchAgent": "TavilySearchAgent"
-            }
+            {"FormatterAgent": "FormatterAgent", "TavilySearchAgent": "TavilySearchAgent"}
         )
 
-        # Conditional routing from TavilySearchAgent
-        def _route_after_search(state: Dict) -> str:
+        def _route_after_search(state: Dict):
             if state.get("high_score_urls"):
                 return "TavilyExtractAgent"
             if state.get("mid_score_urls"):
@@ -67,60 +66,68 @@ class MultiAgentPipeline:
         self.graph.add_conditional_edges(
             "TavilySearchAgent",
             self._safe(_route_after_search),
-            {
-                "TavilyExtractAgent": "TavilyExtractAgent",
-                "TavilyCrawlAgent": "TavilyCrawlAgent",
-                "SmartAggregatorAgent": "SmartAggregatorAgent"
-            }
+            {"TavilyExtractAgent": "TavilyExtractAgent", "TavilyCrawlAgent": "TavilyCrawlAgent", "SmartAggregatorAgent": "SmartAggregatorAgent"}
         )
 
-        # Set entry and finish points
+        # Entry/finish
         self.graph.set_entry_point("ClassificationAgent")
         self.graph.set_finish_point("FormatterAgent")
-
-        # Compile graph
         self.app = self.graph.compile()
 
-    # ---------- Safe wrapper ----------
+    # ---------- Wrappers ----------
     def _safe(self, fn):
         def wrapped(state: Dict):
+            start = time.perf_counter()
             try:
-                return fn(state)
+                new_state = fn(state)
             except Exception as e:
-                state["error"] = 'An error occurred while processing your request.'
-                # print(f"Pipeline error in {fn.__name__}: {e}")
-                return state
+                new_state = state
+                new_state["error"] = f"An error occurred: {e}"
+            finally:
+                elapsed = time.perf_counter() - start
+                print(f"[TIMER] {fn.__name__} took {elapsed:.3f} seconds")
+            return new_state
+        return wrapped
+
+    def _async_safe(self, fn):
+        """Wrap node function which might return coroutine"""
+        def wrapped(state: Dict):
+            start = time.perf_counter()
+            try:
+                result = fn(state)
+                if asyncio.iscoroutine(result):
+                    result = asyncio.run(result)
+                new_state = result
+            except Exception as e:
+                new_state = state
+                new_state["error"] = f"Async node error: {e}"
+            finally:
+                elapsed = time.perf_counter() - start
+                print(f"[TIMER] {fn.__name__} took {elapsed:.3f} seconds")
+            return new_state
         return wrapped
 
     # ---------- Node implementations ----------
     def _classify(self, state: Dict) -> Dict:
         query = state.get("query", "")
         classified = self.input_agent.classify_query(query)
-        # print("Classification done:", classified)
         state["classified"] = classified
-
-        # If greeting/irrelevant, put the response for final output
         if classified.get("final"):
-            state["final_response"] = classified.get("query", "")
+            state["final_response"] = classified.get("assistant_message", "")
         return state
 
     def _search_node(self, state: Dict) -> Dict:
         if state.get("error"):
             return state
         classified = state.get("classified", {})
-        query = classified.get("query", "")
+        query = classified.get("assistant_message", "")
         mode = classified.get("mode", "competitor")
-
         results = self.search_agent.search(query, mode)
         state["search_results"] = results
-        print("Search done. Results count:", len(results))
-
-        high_score_urls = [{"url": r["url"], "topic": r.get("topic", "general")} for r in results if r.get("score", 0) > 0.7]
-        mid_score_urls = [{"url": r["url"], "topic": r.get("topic", "general")} for r in results if 0.5 <= r.get("score", 0) <= 0.7]
-
+        high_score_urls = [{"url": r["url"], "topic": r.get("topic", "general")} for r in results if r.get("score",0) > 0.7]
+        mid_score_urls = [{"url": r["url"], "topic": r.get("topic", "general")} for r in results if 0.5 <= r.get("score",0) <=0.7]
         state["high_score_urls"] = high_score_urls if high_score_urls else None
         state["mid_score_urls"] = mid_score_urls if mid_score_urls else None
-
         return state
 
     def _extract(self, state: Dict) -> Dict:
@@ -128,9 +135,7 @@ class MultiAgentPipeline:
             return state
         urls = state.get("high_score_urls", [])
         if urls:
-            docs = list(self.extract_agent.extract(urls))
-            print("Extracted docs count:", len(docs))
-            state["docs"] = docs
+            state["docs"] = list(self.extract_agent.extract(urls))
             state["url_with_topics"] = urls
         else:
             state["docs"] = []
@@ -141,85 +146,81 @@ class MultiAgentPipeline:
             return state
         urls = state.get("mid_score_urls", [])
         if urls:
-            docs = list(self.crawl_agent.crawl(urls))
-            print("Crawled docs count:", len(docs))
-            state["docs"] = docs
+            state["docs"] = list(self.crawl_agent.crawl(urls))
             state["url_with_topics"] = urls
         else:
             state["docs"] = []
         return state
 
+
+    # Inside langgraph_orchestrator.py
+
+
     def _aggregate(self, state: Dict) -> Dict:
+        """
+        Aggregates documents safely using SmartAggregatorAgent.
+
+        Handles synchronous orchestrator, async SmartAggregatorAgent,
+        and environments with a running event loop (FastAPI, Jupyter, etc.)
+        """
+
         if state.get("error"):
             state["aggregated"] = []
             return state
+
         docs = state.get("docs", [])
         url_with_topics = state.get("url_with_topics", [])
-        query = state.get("classified", {}).get("query", "")
-        if docs:
-            aggregated = self.aggregate_agent.process_documents(query, docs, url_with_topics)
-            state["aggregated"] = aggregated
-        else:
+        query = state.get("classified", {}).get("assistant_message", "")
+
+        if not docs:
             state["aggregated"] = []
-        print("Aggregate completed")
+            return state
+
+        try:
+            # Run the async aggregator in a separate thread
+            def run_async_in_thread():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(
+                        self.aggregate_agent.process_documents_async(query, docs, url_with_topics)
+                    )
+                finally:
+                    loop.close()
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_async_in_thread)
+                state["aggregated"] = future.result()
+
+        except Exception as e:
+            state["aggregated"] = []
+            state["error"] = f"Aggregator error: {e}"
+
         return state
 
-    # ---------- _format node ----------
+
     def _format(self, state: Dict) -> Dict:
         if state.get("error"):
-            return {
-                "output": {
-                    "type": "text",
-                    "content": "An error occurred while processing your request.",
-                    "meta": {}
-                }
-            }
-
-        # Handle final_response from classification (greeting/irrelevant)
+            return {"output": {"type":"text","content":state["error"],"meta":{}}}
         final_response = state.get("final_response")
         if final_response is not None:
-            return {
-                "output": {
-                    "type": "text",
-                    "content": final_response,
-                    "meta": {"short_circuit": True}
-                }
-            }
-
-        # Normal aggregation formatting
+            return {"output": {"type":"text","content":final_response,"meta":{"short_circuit":True}}}
         aggregated = state.get("aggregated", {})
         if not aggregated:
-            return {
-                "output": {
-                    "type": "text",
-                    "content": "Didn't find any relevant information.",
-                    "meta": {}
-                }
-            }
-        
-        query = state.get("classified", {}).get("query", "")
-        formatted = self.formatter_agent.format(query,aggregated)
+            return {"output":{"type":"text","content":"Didn't find any relevant information.","meta":{}}}
+        query = state.get("classified",{}).get("assistant_message","")
+        formatted = self.formatter_agent.format(query, aggregated)
         content_blocks = formatted.get("content_blocks", [])
         if not content_blocks:
-            content_blocks = [{"type": "paragraph", "text": formatted.get("summary", "Didn't find any relevant information.")}]
+            content_blocks = [{"type":"paragraph","text":formatted.get("summary","Didn't find any relevant information.")}]
+        return {"output": {"type":"mixed" if len(content_blocks)>1 else "text","content":content_blocks if len(content_blocks)>1 else content_blocks[0]["text"],"meta":{"urls":[d.get("url") for d in state.get("url_with_topics",[])]}}}
 
-        return {
-            "output": {
-                "type": "mixed" if len(content_blocks) > 1 else "text",
-                "content": content_blocks if len(content_blocks) > 1 else content_blocks[0]["text"],
-                "meta": {"urls": [d.get("url") for d in state.get("url_with_topics", [])]}
-            }
-        }
-
-    # ---------- Public API ----------
     def run_pipeline(self, query: str):
         inputs = {"query": query}
         try:
             result = self.app.invoke(inputs)
         except Exception as e:
-            # print(f"Invocation error: {e}")
-            return {"status": "error", "message": "An error occurred while processing your request."}
-
+            return {"status":"error","message":"An error occurred while processing your request."}
         if "output" not in result:
-            return {"status": "error", "message": result.get("error", "An error occurred while processing your request.")}
-        return {"status": "success", "data": result["output"]}
+            return {"status":"error","message":result.get("error","An error occurred while processing your request.")}
+        return {"status":"success","data":result["output"]}

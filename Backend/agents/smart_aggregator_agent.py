@@ -1,145 +1,95 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor
 
 class SmartAggregatorAgent:
-    """
-    Ultra-fast topic-aware aggregation with strict token limit.
-    Processes raw content from multiple documents in parallel, aggregates by topic,
-    and provides a blended visual-rich summary.
-    """
-
-    def __init__(self, llm_client, max_workers=8, max_docs_process=20, max_input_chars=15000):
+    def __init__(self, llm_client, max_workers=4, max_docs_process=4, max_input_chars=20000, per_doc_timeout=6):
         self.llm = llm_client
         self.max_workers = max_workers
         self.max_docs_process = max_docs_process
-        self.max_input_chars = max_input_chars  # Approx 8192 tokens safe
+        self.max_input_chars = max_input_chars
+        self.per_doc_timeout = per_doc_timeout
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
 
-    def _trim_for_token_limit(self, text):
+    def _trim_for_token_limit(self, text: str):
         return text[:self.max_input_chars] if text else ""
 
-    def _llm_call(self, prompt):
-        """Safe wrapper to prevent null or apology/external-knowledge responses."""
+    async def _llm_call_async(self, prompt: str):
+        loop = asyncio.get_event_loop()
         try:
-            reply = self.llm.chat([{"role": "user", "content": prompt}])
+            reply = await loop.run_in_executor(
+                self.executor,
+                lambda: self.llm.chat([{"role": "user", "content": prompt}])
+            )
             content = reply.get("content", "").strip()
-            if not content:
-                return "NO RESPONSE GENERATED"
-            if "sorry" in content.lower() or "external" in content.lower():
-                return "NO RELEVANT INFO"
-            return content
-        except Exception as e:
-            return f"LLM ERROR: {str(e)}"
+            return content or None
+        except Exception:
+            return None
 
-    def _extract_relevant(self, query, doc, topic):
-        """
-        Step 1: Extract relevant info per doc.
-        Forced: Only use given content. No URL or metadata influencing the model.
-        """
-
-        # Get raw content safely
-        raw_content = doc.get("text", "")
-        # ✅ Trim and properly detect empty or whitespace-only content
-        raw = self._trim_for_token_limit(raw_content)
-        if not raw.strip():  # Handles whitespace-only or accidental blank data
-            raw = "EMPTY_CONTENT"
-
-        # Limit number of images used
-        images = (doc.get("images") or [])[:3]
-
-        # Optional: Prevent excessive logging output
-        # print('raw', raw[:200] + ("..." if len(raw) > 200 else ""))
-
-        # Build prompt without external assumptions
+    async def _extract_relevant_async(self, query: str, doc: Dict, topic: str):
+        raw_content = self._trim_for_token_limit(doc.get("text", "")) or "EMPTY_CONTENT"
         prompt = (
-            "You are an AI assistant. Analyze ONLY the content provided below.\n"
-            "Do NOT apologize. Do NOT say external knowledge is required.\n"
-            "If the content partially answers the question, summarize ONLY that part.\n"
-            "If nothing is relevant, respond exactly with 'NO RELEVANT INFO'.\n\n"
+            "Analyze ONLY the content below. Do NOT use external knowledge.\n"
             f"Question: {query}\n\n"
-            f"Content:\n{raw}\n\n"
-            "Relevant Summary:"
+            f"Content:\n{raw_content}\n\n"
+            "Relevant Summary:\n"
+            "Return ONLY a concise summary if the content is relevant to the question.\n"
+            "If the content is NOT relevant to the question, return exactly an empty string, with no quotes or explanation."
         )
 
-        # LLM call
-        extracted = self._llm_call(prompt)
-        if not extracted or extracted == "NO RESPONSE GENERATED":
-            extracted = "NO RELEVANT INFO"
-
-        # Return consistent structure
+        summary = await self._llm_call_async(prompt)
         return {
             "url": doc.get("url", ""),
             "topic": topic,
-            "summary": extracted,
-            "images": images,
+            "summary": summary,
+            "images": (doc.get("images") or [])[:3],
             "title": doc.get("title", ""),
         }
 
-
-    def process_documents(self, query, docs, url_topic_list):
-        """
-        Full pipeline:
-        1. Extract relevant info per doc (parallel)
-        2. Aggregate by topic
-        3. Generate topic-wise summaries
-        4. Generate final blended summary
-        """
+    async def process_documents_async(self, query: str, docs: List[Dict], url_topic_list: List[Dict]):
         url_to_topic = {item["url"]: item.get("topic", "general") for item in url_topic_list}
+        docs_to_process = docs[:self.max_docs_process]
 
-        # ---------- Step 1: Parallel extraction ----------
-        results = []
+        semaphore = asyncio.Semaphore(self.max_workers)
 
-        if isinstance(docs, dict) and "results" in docs:
-            docs_to_process = docs["results"]
-        else:
-            docs_to_process = docs
+        async def sem_task(doc):
+            async with semaphore:
+                try:
+                    return await asyncio.wait_for(
+                        self._extract_relevant_async(query, doc, url_to_topic.get(doc.get("url", ""), "general")),
+                        timeout=self.per_doc_timeout
+                    )
+                except asyncio.TimeoutError:
+                    return None
 
-        # Limit to 20 documents - Crawl is many documents
-        docs_to_process = docs_to_process[:self.max_docs_process]
-
-        with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
-            futures = [
-                ex.submit(self._extract_relevant, query, doc, url_to_topic.get(doc["url"], "general"))
-                for doc in docs_to_process
-            ]
-            for f in as_completed(futures):
-                results.append(f.result())
-
-        # print('results',results)
-
-        # ---------- Step 2: Organize results by topic ----------
+        tasks = [sem_task(doc) for doc in docs_to_process]
+        results = [r for r in await asyncio.gather(*tasks) if r and r.get("summary")]
+        # print("res_agg",results)
+        # Aggregate by topic
         topic_map = {}
         for item in results:
             topic_map.setdefault(item["topic"], []).append(item)
 
-        # Combine all extracted summaries into a single input for the LLM
         combined_text = ""
         for topic, items in topic_map.items():
-            topic_text = "\n".join(
-                f"- {x['summary']} (URL: {x['url']})"
-                for x in items
-                if x["summary"] != "NO RELEVANT INFO"
-            )
+            topic_text = "\n".join(f"- {x['summary']} (URL: {x['url']})" for x in items)
             if topic_text:
                 combined_text += f"Topic: {topic}\n{topic_text}\n\n"
 
-        # ---------- Step 3: Single LLM call ----------
-        if combined_text:
+        if combined_text.strip():
+            # Final aggregation
             final_prompt = (
                 f"You are given extracted summaries strictly from provided documents.\n"
                 f"User Query: {query}\n\n"
-                "Your task: Combine ONLY the provided summaries below into a single, clear, and structured answer.\n"
-                "STRICT RULES:\n"
-                "- Use ONLY the given summaries.\n"
-                "- Do NOT bring in external knowledge.\n"
-                "- Do NOT apologize or mention missing information.\n"
-                "- Preserve bullet points, URLs, and other useful content.\n\n"
-                f"{combined_text}\n"
-                "Final Answer:"
+                "Combine ONLY the provided summaries into a single, clear answer.\n"
+                "Do NOT use external knowledge.\n\n"
+                f"{combined_text}\nFinal Answer:"
             )
-            blended_reply = self._llm_call(final_prompt)
-        else:
-            blended_reply = "NO RELEVANT INFORMATION FOUND."
 
-        # ---------- Step 4: Return ----------
-        return {
-            "summary": blended_reply.strip()
-        }
+            blended_reply = await self._llm_call_async(final_prompt) or "No Relevant information found."
+        else:
+            blended_reply="No Relevant information found."
+        return {"summary": blended_reply.strip()}
+
+    def process_documents(self, query: str, docs: List[Dict], url_topic_list: List[Dict]):
+        return asyncio.run(self.process_documents_async(query, docs, url_topic_list))

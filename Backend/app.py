@@ -27,11 +27,11 @@ class LLMClient:
 
     def chat(self, messages):
         response = openai.ChatCompletion.create(
-            model="gpt-4",
+            model="gpt-4o",
             messages=messages,
             temperature=0.0,
-            max_tokens=800,
-            timeout=6
+            max_tokens=400,
+            timeout=5
         )
         return {"content": response.choices[0].message.content.strip()}
 

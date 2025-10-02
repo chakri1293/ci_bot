@@ -8,7 +8,7 @@ class TavilyCrawlAgent:
     Matches ExtractAgent signature: returns (results, original_input)
     """
 
-    def __init__(self, tavily_client, max_urls: int = 5, max_workers: int = 3):
+    def __init__(self, tavily_client, max_urls: int = 3, max_workers: int = 3):
         """
         tavily_client: shared TavilyClient instance
         max_urls: limit number of URLs to process for speed
@@ -24,7 +24,7 @@ class TavilyCrawlAgent:
             1. List of crawled documents
             2. Original urls_with_topics (unchanged)
         """
-        print("crawl started")
+        # print("crawl started")
         if not urls_with_topics:
             return [], urls_with_topics
 
@@ -48,7 +48,7 @@ class TavilyCrawlAgent:
                 docs = self._crawl_single(item["url"], item.get("topic", "general"))
                 results.extend(docs)
 
-        print("crawl done")
+        # print("crawl done")
         return results
 
     def _crawl_single(self, url: str, topic: str) -> List[Dict]:
@@ -58,7 +58,7 @@ class TavilyCrawlAgent:
         try:
             response = self.client.crawl(
                 url=url,      
-                limit=10,
+                limit=3,
             )
 
             docs = []
