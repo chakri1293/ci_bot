@@ -3,68 +3,74 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from langgraph_orchestrator import MultiAgentPipeline
 import openai
-import uvicorn
-from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
-from tavily import TavilyClient  # import TavilyClient
 from pymongo import MongoClient
+from tavily import TavilyClient
+from config import settings  # ✅ Centralized config
 
 
-# Load environment variables
-load_dotenv()
-
-# ---- MongoDB Client Setup ----
-MONGO_URI = os.getenv("MONGO_URI")  # Add to .env: MONGO_URI="mongodb+srv://..."
-mongo_client = MongoClient(MONGO_URI)
-mongo_db = mongo_client["multi_agent_ci"]
-
-# Real LLM client wrapper using OpenAI API key from env
+# ---- Initialize OpenAI Client ----
 class LLMClient:
     def __init__(self):
-        openai.api_key = os.getenv("OPENAI_API_KEY")
+        openai.api_key = settings.OPENAI_API_KEY
         if not openai.api_key:
             raise ValueError("OPENAI_API_KEY not set in environment")
 
     def chat(self, messages):
         response = openai.ChatCompletion.create(
-            model="gpt-4o",
+            model=settings.LLM_MODEL,
             messages=messages,
-            temperature=0.0,
-            max_tokens=400,
-            timeout=5
+            temperature=settings.LLM_TEMPERATURE,
+            max_tokens=settings.LLM_MAX_TOKENS,
+            timeout=settings.LLM_TIMEOUT
         )
         return {"content": response.choices[0].message.content.strip()}
 
 
-# Tavily client wrapper
+# ---- Initialize Tavily Client ----
 class TavilyAPIClient:
     def __init__(self):
-        tavily_api_key = os.getenv("TAVILY_API_KEY")
-        if not tavily_api_key:
+        if not settings.TAVILY_API_KEY:
             raise ValueError("TAVILY_API_KEY not set in environment")
-        self.client = TavilyClient(api_key=tavily_api_key)
+        self.client = TavilyClient(api_key=settings.TAVILY_API_KEY)
 
 
-# FastAPI app
+# ---- MongoDB Client Setup ----
+mongo_client = MongoClient(settings.MONGO_URI)
+mongo_db = mongo_client[settings.MONGODB_NAME]
+
+
+# ---- FastAPI Setup ----
 app = FastAPI(title="Multi-Agent Competitive Intelligence API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("APP_URL")],  # React dev server origin
+    allow_origins=["*"],  # Can be restricted later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize clients
+# Initialize services
 llm_client = LLMClient()
 tavily_client = TavilyAPIClient()
 
-# Pass llm_client and tavily_client.client to your pipeline if needed
-pipeline = MultiAgentPipeline(llm_client, tavily_client.client,mongo_db)  # Adjust constructor
+# Initialize Multi-Agent Pipeline
+pipeline = MultiAgentPipeline(llm_client, tavily_client.client, mongo_db)
 
 
+# ---- API Models & Routes ----
 class QueryRequest(BaseModel):
     query: str
+
+
+@app.get("/")
+async def root():
+    return {"message": "Multi-Agent Competitive Intelligence API is running"}
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
 
 @app.post("/query")
@@ -75,5 +81,5 @@ async def handle_query(request: QueryRequest):
     return result
 
 
-if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+# if __name__ == "__main__":
+#     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

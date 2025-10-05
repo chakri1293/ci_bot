@@ -1,32 +1,42 @@
-# Byte-compiled / optimized / DLL files
+# Python artifacts
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
 
-# Virtual environment directories
-venv/
-env/
-
-# dotenv environment variables file
+# Environment & config
 .env
+*.env
+*.venv
+.venv
 
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-.eggs/
-
-# IDE files
+# IDE & OS settings
 .vscode/
 .idea/
-*.iml
-
-# Logs
-*.log
-
-# Docker related
-*.dockerignore
-
-# OS Files
 .DS_Store
-Thumbs.db
+
+# Docker
+*.log
+*.db
+*.sqlite3
+
+# Cache & build
+*.egg-info/
+dist/
+build/
+*.bak
+*.swp
+
+# Test, reports, coverage
+htmlcov/
+.tox/
+.coverage
+.pytest_cache/
+tests/__pycache__/
+
+# Misc
+*.tmp
+
+# Elastic Beanstalk Files
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml
