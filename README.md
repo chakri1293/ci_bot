@@ -70,7 +70,7 @@ The database is fully managed and hosted in the cloud, enabling secure and scala
 The API is deployed on AWS Elastic Beanstalk and can be accessed here:
 
 🔗 **Health Check:**  
-http://ci-news-system-backendapi-env.eba-8fpv57cs.us-west-2.elasticbeanstalk.com/health
+http://ci-news-system-env.eba-mpx8mspp.us-west-2.elasticbeanstalk.com/health
 
 You can replace `/health` with `/query` to make application-level requests.
 

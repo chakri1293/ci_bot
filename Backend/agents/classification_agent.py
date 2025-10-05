@@ -46,6 +46,7 @@ class ClassificationAgent:
             "If greeting, produce friendly professional greeting.\n"
             "If irrelevant, produce short polite response.\n"
             "Consider last interactions.\n"
+            "If the input is not related to industry, competitors, or market/industry news, treat it strictly as 'irrelevant' without assuming external context or fabricating knowledge.\n"
             "Return ONLY valid JSON in this format:\n"
             '{ "mode": "competitor|news|blended|greeting|irrelevant", "normalized_query": "..." }'
         )

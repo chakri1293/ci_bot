@@ -25,7 +25,8 @@ export default function App() {
 
     try {
       // const response = await fetch("http://ci-news-system-backendapi-env.eba-8fpv57cs.us-west-2.elasticbeanstalk.com/query", {
-      const response = await fetch("http://127.0.0.1:8000/query", {
+      // const response = await fetch("http://127.0.0.1:8000/query", {
+      const response = await fetch("http://ci-news-system-env.eba-mpx8mspp.us-west-2.elasticbeanstalk.com/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: userQuery }),
