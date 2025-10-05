@@ -2,6 +2,8 @@
 
 This project is a FastAPI-based microservice providing multi-agent competitive intelligence functionality with integrations for Tavily, OpenAI, MongoDB, and LangGraph orchestration.
 
+https://www.loom.com/share/05ab568789104f32a6fe50d21d27b717?sid=3c41d6a0-3ce1-4ffe-9a85-a99da02db56f
+
 ## Features
 - Modular agent design (extract, crawl, search, format, classify, aggregate)
 - LangGraph orchestration for multi-agent workflows
