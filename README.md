@@ -10,6 +10,17 @@ https://www.loom.com/share/05ab568789104f32a6fe50d21d27b717?sid=3c41d6a0-3ce1-4f
 - Tavily and OpenAI integrations
 - MongoDB for persistent data storage
 
+## Summary
+
+This project focuses on **Competitive Intelligence and Real-Time News Synthesis**.  
+It leverages a multi-agent architecture to process user queries and provide:
+- **Competitor insights** such as recent product launches, strategic updates, and innovations  
+- **Industry-related news** offering a broader market perspective  
+- **Blended intelligence**, combining both competitor and industry information to deliver a unified, context-aware summary
+
+The system helps users stay informed about market movements and competitor activities through automated information retrieval, summarization, and formatting for real-time insights.
+
+
 ## Process Flow
 
   The system is a **multi-agent architecture** orchestrated via `LangGraphOrchestrator`.
@@ -123,14 +134,16 @@ The database is fully managed and hosted in the cloud, enabling secure and scala
 
 ### ✅ Live Deployment (AWS Elastic Beanstalk)
 
-The API is deployed on AWS Elastic Beanstalk and can be accessed here:
-
-🔗 **Health Check:**  
-http://ci-news-system-env.eba-mpx8mspp.us-west-2.elasticbeanstalk.com/health
+The UI is deployed on AWS S3 and can be accessed here:
 
 ### ✅ Frontend Deployment (AWS S3)
 
 http://ci-news-frontend-app.s3-website-us-west-2.amazonaws.com/
+
+The API is deployed on AWS Elastic Beanstalk and can be accessed here:
+
+🔗 **API Health Check:**  
+http://ci-news-system-env.eba-mpx8mspp.us-west-2.elasticbeanstalk.com/health
 
 You can replace `/health` with `/query` to make application-level requests.
 
