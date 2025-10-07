@@ -128,6 +128,10 @@ The API is deployed on AWS Elastic Beanstalk and can be accessed here:
 🔗 **Health Check:**  
 http://ci-news-system-env.eba-mpx8mspp.us-west-2.elasticbeanstalk.com/health
 
+### ✅ Frontend Deployment (AWS S3)
+
+http://ci-news-frontend-app.s3-website-us-west-2.amazonaws.com/
+
 You can replace `/health` with `/query` to make application-level requests.
 
 Example `curl`:
@@ -137,9 +141,5 @@ curl -X POST \
   http://ci-news-system-backendapi-env.eba-8fpv57cs.us-west-2.elasticbeanstalk.com/query \
   -H "Content-Type: application/json" \
   -d '{"query": "Latest AI trends"}'
-
-### ✅ Frontend Deployment (AWS S3)
-
-http://ci-news-frontend-app.s3-website-us-west-2.amazonaws.com/
 
 
